@@ -3,16 +3,16 @@ from omegaconf import DictConfig
 from pathlib import Path
 from dotenv import load_dotenv
 
-from indexing_and_retrieval.data_loader import DataManager
-from indexing_and_retrieval.preprocessing import TextPreprocessor
-from indexing_and_retrieval.visualizer import FrequencyAnalyzer
-from indexing_and_retrieval.es_index import ESIndex
-from indexing_and_retrieval.self_index import SelfIndex
-from indexing_and_retrieval.metrics import PerformanceMetrics
+from indexing_and_retrieval.utils.data_loader import DataManager
+from indexing_and_retrieval.utils.preprocessing import TextPreprocessor
+from indexing_and_retrieval.utils.visualizer import FrequencyAnalyzer
+from indexing_and_retrieval.core.es_index import ESIndex
+from indexing_and_retrieval.core.self_index import SelfIndex
+from indexing_and_retrieval.utils.metrics import PerformanceMetrics
 
 load_dotenv()
 
-@hydra.main(version_base=None, config_path="config", config_name="config")
+@hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig):
     print("=" * 80)
     print("IRE Assignment: Indexing and Retrieval")

@@ -23,9 +23,8 @@ redis:
 paths:
   news_dir: indexing_and_retrieval/data/free-news-datasets/News_Datasets
   wiki_file: indexing_and_retrieval/data/20231101.en/train-00006-of-00041.parquet
-  indices_dir: indices
-  plots_dir: plots
-  metrics_dir: metrics
+  indices_dir: indexing_and_retrieval/outputs/indices
+  plots_dir: indexing_and_retrieval/outputs/plots
+  metrics_dir: indexing_and_retrieval/outputs/metrics
 
-# Set to false to skip frequency analysis (saves ~15 mins on 50k docs)
-compute_frequencies: false
+compute_frequencies: true

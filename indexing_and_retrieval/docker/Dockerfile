@@ -22,6 +22,6 @@ RUN python -c "import nltk; nltk.download('stopwords', quiet=True); nltk.downloa
 
 COPY . .
 
-RUN mkdir -p plots metrics indices
+RUN mkdir -p /app/plots /app/metrics /app/indices
 
-CMD ["python", "main.py"]
+CMD ["python", "scripts/main.py"]

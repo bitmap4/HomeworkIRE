@@ -277,6 +277,7 @@ class PerformanceMetrics:
         ax.set_title('D: Functional Metrics (vs ESIndex)', fontsize=12, fontweight='bold')
         ax.set_xticks(x_pos)
         ax.set_xticklabels([info_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.set_ylim(95, 100)
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
         
@@ -387,6 +388,7 @@ class PerformanceMetrics:
         ax.set_title('D: Functional Metrics (vs ESIndex)', fontsize=12, fontweight='bold')
         ax.set_xticks(x_pos)
         ax.set_xticklabels([dstore_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.set_ylim(95, 100)
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
         
@@ -497,6 +499,7 @@ class PerformanceMetrics:
         ax.set_title('D: Functional Metrics (vs ESIndex)', fontsize=12, fontweight='bold')
         ax.set_xticks(x_pos)
         ax.set_xticklabels([compr_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.set_ylim(95, 100)
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
         
@@ -611,6 +614,7 @@ class PerformanceMetrics:
         ax.set_title('D: Functional Metrics (vs ESIndex)', fontsize=12, fontweight='bold')
         ax.set_xticks(x_pos)
         ax.set_xticklabels([skip_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.set_ylim(95, 100)
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
         
@@ -724,6 +728,7 @@ class PerformanceMetrics:
         ax.set_title('D: Functional Metrics (vs ESIndex)', fontsize=12, fontweight='bold')
         ax.set_xticks(x_pos)
         ax.set_xticklabels(sorted_labels, rotation=15, ha='right')
+        ax.set_ylim(95, 100)
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
         

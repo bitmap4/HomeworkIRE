@@ -4,9 +4,9 @@ from elasticsearch import Elasticsearch
 from elasticsearch.helpers import bulk
 from omegaconf import DictConfig
 
-from indexing_and_retrieval.index_base import IndexBase
-from indexing_and_retrieval.preprocessing import TextPreprocessor
-from indexing_and_retrieval.query_parser import parse_query, ASTNode, TermNode, PhraseNode, BinaryOpNode, UnaryOpNode
+from indexing_and_retrieval.core.index_base import IndexBase
+from indexing_and_retrieval.utils.preprocessing import TextPreprocessor
+from indexing_and_retrieval.utils.query_parser import parse_query, ASTNode, TermNode, PhraseNode, BinaryOpNode, UnaryOpNode
 
 class ESIndex(IndexBase):
     def __init__(self, config: DictConfig, core='ESIndex', info='BOOLEAN', 

@@ -5,11 +5,11 @@ import json
 from pathlib import Path
 from omegaconf import DictConfig
 
-from indexing_and_retrieval.index_base import IndexBase, IndexInfo, DataStore, Compression, QueryProc, Optimizations
-from indexing_and_retrieval.preprocessing import TextPreprocessor
-from indexing_and_retrieval.compression import get_compressor, CompressionBase
-from indexing_and_retrieval.datastores import get_datastore, DataStoreBase
-from indexing_and_retrieval.query_parser import parse_query, ASTNode, TermNode, PhraseNode, BinaryOpNode, UnaryOpNode
+from indexing_and_retrieval.core.index_base import IndexBase, IndexInfo, DataStore, Compression, QueryProc, Optimizations
+from indexing_and_retrieval.utils.preprocessing import TextPreprocessor
+from indexing_and_retrieval.utils.compression import get_compressor, CompressionBase
+from indexing_and_retrieval.utils.datastores import get_datastore, DataStoreBase
+from indexing_and_retrieval.utils.query_parser import parse_query, ASTNode, TermNode, PhraseNode, BinaryOpNode, UnaryOpNode
 
 class PostingsList:
     def __init__(self):

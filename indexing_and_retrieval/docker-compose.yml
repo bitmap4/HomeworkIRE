@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: indexing_and_retrieval/Dockerfile
+    container_name: ire_app
+    environment:
+      - TZ=Asia/Kolkata
+      - ES_HOST=elasticsearch
+      - ES_PORT=9200
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-ire_index}
+      - POSTGRES_USER=${POSTGRES_USER:-bitmap4}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-12345678}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONPATH=/workspace
+    volumes:
+      - ..:/workspace
+    working_dir: /workspace
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ire_network
+    command: python indexing_and_retrieval/scripts/main.py
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: ire_elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+    ports:
+      - "${ES_PORT:-9200}:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    networks:
+      - ire_network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  postgres:
+    image: postgres:15
+    container_name: ire_postgres
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-ire_index}
+      - POSTGRES_USER=${POSTGRES_USER:-bitmap4}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-12345678}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - ire_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bitmap4} -d ${POSTGRES_DB:-ire_index}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: ire_redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - ire_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  es_data:
+  pg_data:
+  redis_data:
+
+networks:
+  ire_network:
+    driver: bridge

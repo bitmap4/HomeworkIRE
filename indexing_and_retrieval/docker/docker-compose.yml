@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   app:
-    build: .
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: ire_app
     environment:
       - TZ=Asia/Kolkata
@@ -16,12 +18,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     volumes:
-      - ./indexing_and_retrieval:/app/indexing_and_retrieval
-      - ./config:/app/config
-      - ./plots:/app/plots
-      - ./metrics:/app/metrics
-      - ./indices:/app/indices
-      - ./.env:/app/.env
+      - ..:/app
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -31,7 +28,7 @@ services:
         condition: service_healthy
     networks:
       - ire_network
-    command: python main.py
+    command: python scripts/main.py
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
