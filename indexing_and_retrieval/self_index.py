@@ -288,11 +288,12 @@ class SelfIndex(IndexBase):
 
         # Batch persistence: write terms in batches and commit periodically to avoid
         # excessive memory use or extremely long single transactions.
-        # Safe retrieval of batch_size from config, default to 1000
+        # For CustomDiskStore with consolidated file: larger batch = fewer writes
         try:
             batch_size = int(self.config.persist.batch_size)
         except Exception:
-            batch_size = 1000
+            # Use much larger batch for disk-based stores to minimize I/O
+            batch_size = 5000
         term_count = 0
         total_terms = len(self.inverted_index)
 

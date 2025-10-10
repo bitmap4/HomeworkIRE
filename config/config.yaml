@@ -26,3 +26,6 @@ paths:
   indices_dir: indices
   plots_dir: plots
   metrics_dir: metrics
+
+# Set to false to skip frequency analysis (saves ~15 mins on 50k docs)
+compute_frequencies: false

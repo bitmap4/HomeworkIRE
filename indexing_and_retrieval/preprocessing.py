@@ -1,4 +1,5 @@
 import string
+import re
 from typing import List
 from collections import Counter
 import nltk
@@ -17,6 +18,19 @@ class TextPreprocessor:
         
         self.stemmer = PorterStemmer()
         self.stop_words = set(stopwords.words(config.stopwords))
+        
+        # Pre-compile regex for faster punctuation removal
+        if self.config.remove_punctuation:
+            self.punctuation_pattern = re.compile(f'[{re.escape(string.punctuation)}]')
+        
+        # Cache for stemmed words to avoid re-stemming common terms
+        self._stem_cache = {}
+    
+    def _stem_cached(self, word: str) -> str:
+        """Cached stemming for performance."""
+        if word not in self._stem_cache:
+            self._stem_cache[word] = self.stemmer.stem(word)
+        return self._stem_cache[word]
     
     def tokenize(self, text: str, preprocess: bool = True) -> List[str]:
         if not text:
@@ -26,7 +40,8 @@ class TextPreprocessor:
             text = text.lower()
         
         if self.config.remove_punctuation:
-            text = text.translate(str.maketrans('', '', string.punctuation))
+            # Use pre-compiled regex (faster than str.translate for large texts)
+            text = self.punctuation_pattern.sub(' ', text)
         
         tokens = text.split()
         
@@ -36,8 +51,8 @@ class TextPreprocessor:
         if not preprocess:
             return tokens
         
-        tokens = [t for t in tokens if t not in self.stop_words]
-        tokens = [self.stemmer.stem(t) for t in tokens]
+        # Filter stopwords and stem in a single pass (more efficient)
+        tokens = [self._stem_cached(t) for t in tokens if t not in self.stop_words]
         
         return tokens
     

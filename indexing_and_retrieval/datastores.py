@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 import psycopg2
 from psycopg2.extras import Json, execute_values
+from psycopg2 import Binary
 import redis
 from omegaconf import DictConfig
 
@@ -29,66 +30,47 @@ class CustomDiskStore(DataStoreBase):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.cache = {}
-        self.key_map_file = self.storage_path / '_key_map.pkl'
-        self.key_to_hash = {}
-        self.hash_to_key = {}
-        self._load_key_map()
+        self.data_file = self.storage_path / 'index_data.pkl'
+        self.persistent_data = {}
+        self._load_data()
     
-    def _load_key_map(self):
-        if self.key_map_file.exists():
-            with open(self.key_map_file, 'rb') as f:
-                self.key_to_hash = pickle.load(f)
-                self.hash_to_key = {v: k for k, v in self.key_to_hash.items()}
-    
-    def _save_key_map(self):
-        with open(self.key_map_file, 'wb') as f:
-            pickle.dump(self.key_to_hash, f)
-    
-    def _get_hash(self, key: str) -> str:
-        if key not in self.key_to_hash:
-            key_hash = hashlib.sha256(key.encode('utf-8')).hexdigest()[:16]
-            self.key_to_hash[key] = key_hash
-            self.hash_to_key[key_hash] = key
-        return self.key_to_hash[key]
+    def _load_data(self):
+        """Load all data from the single consolidated file."""
+        if self.data_file.exists():
+            try:
+                with open(self.data_file, 'rb') as f:
+                    self.persistent_data = pickle.load(f)
+            except Exception as e:
+                print(f"Warning: Failed to load index data: {e}")
+                self.persistent_data = {}
 
     def put(self, key: str, value):
         self.cache[key] = value
 
     def get(self, key: str):
+        # Check cache first, then persistent data
         if key in self.cache:
             return self.cache[key]
-        
-        key_hash = self._get_hash(key)
-        file_path = self.storage_path / f"{key_hash}.pkl"
-        if file_path.exists():
-            with open(file_path, 'rb') as f:
-                return pickle.load(f)
-        return None
+        return self.persistent_data.get(key)
     
     def get_all(self) -> Dict[str, any]:
-        all_data = {}
-        for file_path in self.storage_path.glob("*.pkl"):
-            if file_path.name == '_key_map.pkl':
-                continue
-            key_hash = file_path.stem
-            if key_hash in self.hash_to_key:
-                key = self.hash_to_key[key_hash]
-                with open(file_path, 'rb') as f:
-                    all_data[key] = pickle.load(f)
+        # Merge persistent data with cache (cache takes precedence)
+        all_data = dict(self.persistent_data)
+        all_data.update(self.cache)
         return all_data
 
     def exists(self, key: str) -> bool:
-        if key not in self.key_to_hash:
-            return False
-        key_hash = self.key_to_hash[key]
-        return (self.storage_path / f"{key_hash}.pkl").exists()
+        return key in self.cache or key in self.persistent_data
 
     def commit(self):
-        for key, value in self.cache.items():
-            key_hash = self._get_hash(key)
-            with open(self.storage_path / f"{key_hash}.pkl", 'wb') as f:
-                pickle.dump(value, f)
-        self._save_key_map()
+        """Write all cached data to the single consolidated file."""
+        # Merge cache into persistent data
+        self.persistent_data.update(self.cache)
+        
+        # Write everything to disk in one operation
+        with open(self.data_file, 'wb') as f:
+            pickle.dump(self.persistent_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        
         self.cache.clear()
 
 class PostgresStore(DataStoreBase):
@@ -127,6 +109,9 @@ class PostgresStore(DataStoreBase):
     
     def put(self, key: str, value: Any):
         # Buffer the put operations and commit in bulk in commit()
+        # Remove NUL bytes from key (PostgreSQL TEXT can't contain them)
+        key = key.replace('\x00', '')
+        
         if isinstance(value, bytes):
             data_to_store = value
             is_json = False
@@ -140,7 +125,8 @@ class PostgresStore(DataStoreBase):
         # Store in-memory for batch commit
         if not hasattr(self, '_batch'):
             self._batch = []
-        self._batch.append((key, data_to_store, is_json))
+        # Wrap bytes in psycopg2.Binary to handle NUL bytes properly
+        self._batch.append((key, Binary(data_to_store), is_json))
     
     def get(self, key: str):
         with self.conn.cursor() as cur:
@@ -176,17 +162,17 @@ class PostgresStore(DataStoreBase):
             return cur.fetchone() is not None
     
     def commit(self):
-        # Flush any buffered puts using a single bulk upsert (execute_values)
+        # Flush any buffered puts using executemany (handles binary data properly)
         if not hasattr(self, '_batch') or not self._batch:
             return
 
-        sql = f"INSERT INTO {self.table_name} (key, value, is_json) VALUES %s " \
+        sql = f"INSERT INTO {self.table_name} (key, value, is_json) VALUES (%s, %s, %s) " \
               f"ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, is_json = EXCLUDED.is_json"
 
         with self.conn.cursor() as cur:
-            # Use psycopg2.extras.execute_values for bulk upsert
             try:
-                execute_values(cur, sql, self._batch, template=None, page_size=1000)
+                # executemany handles Binary() properly, unlike execute_values with template=None
+                cur.executemany(sql, self._batch)
                 self.conn.commit()
             except Exception:
                 self.conn.rollback()

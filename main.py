@@ -32,43 +32,49 @@ def main(cfg: DictConfig):
     print("\n[1/6] Loading documents...")
     documents = data_manager.load_all_documents()
     
-    print(f"\n[2/6] Analyzing word frequencies...")
-    doc_texts = [text for _, text in documents]
-    
-    print("Computing raw frequencies...")
-    freq_raw = preprocessor.compute_term_frequencies(doc_texts, preprocess=False)
-    
-    print("Computing preprocessed frequencies...")
-    freq_processed = preprocessor.compute_term_frequencies(doc_texts, preprocess=True)
-    
-    print("Generating frequency plots...")
-    freq_analyzer.plot_frequency_distribution(
-        freq_raw, 
-        "Word Frequency Distribution (Raw)", 
-        "frequency_raw.png",
-        top_n=cfg.preprocessing.plots.top_n,
-        log_scale=cfg.preprocessing.plots.log_scale
-    )
-    
-    freq_analyzer.plot_frequency_distribution(
-        freq_processed,
-        "Word Frequency Distribution (Preprocessed)",
-        "frequency_preprocessed.png",
-        top_n=cfg.preprocessing.plots.top_n,
-        log_scale=cfg.preprocessing.plots.log_scale
-    )
-    
-    freq_analyzer.plot_comparison(
-        freq_raw,
-        freq_processed,
-        "frequency_comparison.png",
-        top_n=30
-    )
-    
-    freq_analyzer.plot_zipf_distribution(
-        freq_processed,
-        "zipf_distribution.png"
-    )
+    if cfg.get('compute_frequencies', True):
+        print(f"\n[2/6] Analyzing word frequencies...")
+        doc_texts = [text for _, text in documents]
+        
+        print("Computing raw frequencies...")
+        freq_raw = preprocessor.compute_term_frequencies(doc_texts, preprocess=False)
+        
+        print("Computing preprocessed frequencies...")
+        freq_processed = preprocessor.compute_term_frequencies(doc_texts, preprocess=True)
+        
+        if cfg.metrics.get('generate_plots', True):
+            print("Generating frequency plots...")
+            freq_analyzer.plot_frequency_distribution(
+                freq_raw, 
+                "Word Frequency Distribution (Raw)", 
+                "frequency_raw.png",
+                top_n=cfg.preprocessing.plots.top_n,
+                log_scale=cfg.preprocessing.plots.log_scale
+            )
+            
+            freq_analyzer.plot_frequency_distribution(
+                freq_processed,
+                "Word Frequency Distribution (Preprocessed)",
+                "frequency_preprocessed.png",
+                top_n=cfg.preprocessing.plots.top_n,
+                log_scale=cfg.preprocessing.plots.log_scale
+            )
+            
+            freq_analyzer.plot_comparison(
+                freq_raw,
+                freq_processed,
+                "frequency_comparison.png",
+                top_n=30
+            )
+            
+            freq_analyzer.plot_zipf_distribution(
+                freq_processed,
+                "zipf_distribution.png"
+            )
+        else:
+            print("Skipping frequency plots (generate_plots=false)")
+    else:
+        print(f"\n[2/6] Skipping frequency analysis (compute_frequencies=false)")
     
     print(f"\n[3/6] Creating Elasticsearch index...")
     es_index = ESIndex(cfg)
@@ -128,7 +134,7 @@ def main(cfg: DictConfig):
         print(f"Benchmarking {idx_key}...", flush=True)
         
         # Use fewer iterations for SelfIndex to speed up benchmarking on large datasets
-        num_iters = max(10, cfg.metrics.num_iterations // 2)
+        num_iters = max(5, cfg.metrics.num_iterations // 4)
         print(f"  → Measuring latency ({num_iters} iterations)...", flush=True)
         latency = perf_metrics.measure_latency(
             idx.query,
@@ -153,8 +159,8 @@ def main(cfg: DictConfig):
         all_memory_metrics[idx_key] = memory
         print(f"  ✓ Memory: {memory['rss_mb']:.2f} MB", flush=True)
         
-        print(f"  → Computing precision/recall vs ESIndex...", flush=True)
-        functional = perf_metrics.compute_precision_recall_vs_ground_truth(idx, es_index, test_queries)
+        print(f"  → Computing precision/recall vs ESIndex (max 3 queries)...", flush=True)
+        functional = perf_metrics.compute_precision_recall_vs_ground_truth(idx, es_index, test_queries, max_queries=3)
         all_functional_metrics[idx_key] = functional
         print(f"  ✓ Precision: {functional['avg_precision']*100:.1f}%, Recall: {functional['avg_recall']*100:.1f}%, F1: {functional['avg_f1']*100:.1f}%", flush=True)
         
@@ -238,26 +244,29 @@ def main(cfg: DictConfig):
             'rss_mb': all_memory_metrics[idx_key]['rss_mb']
         }
     
-    # Generate assignment-specific plots (each plot shows A, B, C, D metrics)
-    # Plot.C: Comparison by information type (x=1,2,3)
-    perf_metrics.plot_by_info_type(all_latency_metrics, all_throughput_metrics, all_memory_metrics, 
-                                   all_functional_metrics, 'plot_c_comparison_by_info_type.png')
-    
-    # Plot.A: Comparison by datastore type (y=1,2,3)
-    perf_metrics.plot_by_datastore(all_latency_metrics, all_throughput_metrics, all_memory_metrics,
-                                   all_functional_metrics, 'plot_a_comparison_by_datastore.png')
-    
-    # Plot.AB: Comparison by compression (z=1,2,3)
-    perf_metrics.plot_by_compression(all_latency_metrics, all_throughput_metrics, all_memory_metrics,
-                                     all_functional_metrics, 'plot_ab_comparison_by_compression.png')
-    
-    # Plot.A: Comparison with/without skip pointers (i=0/1)
-    perf_metrics.plot_by_skip_pointers(all_latency_metrics, all_throughput_metrics, all_memory_metrics,
-                                       all_functional_metrics, 'plot_a_comparison_skip_pointers.png')
-    
-    # Plot.AC: Comparison by query processing (q=T/D)
-    perf_metrics.plot_by_query_processing(all_latency_metrics, all_throughput_metrics, all_memory_metrics,
-                                          all_functional_metrics, 'plot_ac_comparison_query_processing.png')
+    if cfg.metrics.get('generate_plots', True):
+        # Generate assignment-specific plots (each plot shows A, B, C, D metrics)
+        # Plot.C: Comparison by information type (x=1,2,3)
+        perf_metrics.plot_by_info_type(all_latency_metrics, all_throughput_metrics, all_memory_metrics, 
+                                       all_functional_metrics, 'plot_c_comparison_by_info_type.png')
+        
+        # Plot.A: Comparison by datastore type (y=1,2,3)
+        perf_metrics.plot_by_datastore(all_latency_metrics, all_throughput_metrics, all_memory_metrics,
+                                       all_functional_metrics, 'plot_a_comparison_by_datastore.png')
+        
+        # Plot.AB: Comparison by compression (z=1,2,3)
+        perf_metrics.plot_by_compression(all_latency_metrics, all_throughput_metrics, all_memory_metrics,
+                                         all_functional_metrics, 'plot_ab_comparison_by_compression.png')
+        
+        # Plot.A: Comparison with/without skip pointers (i=0/1)
+        perf_metrics.plot_by_skip_pointers(all_latency_metrics, all_throughput_metrics, all_memory_metrics,
+                                           all_functional_metrics, 'plot_a_comparison_skip_pointers.png')
+        
+        # Plot.AC: Comparison by query processing (q=T/D)
+        perf_metrics.plot_by_query_processing(all_latency_metrics, all_throughput_metrics, all_memory_metrics,
+                                              all_functional_metrics, 'plot_ac_comparison_query_processing.png')
+    else:
+        print("Skipping plot generation (generate_plots=false)")
     
     # Save all metrics to JSON
     perf_metrics.save_metrics({

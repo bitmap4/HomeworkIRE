@@ -2,7 +2,7 @@ news:
   # Use first 100 available zips, 1000 docs each = 100k total documents
   selected_zips: []  # Empty list means use all available zips
   max_zips: 105
-  max_docs_per_zip: 500
+  max_docs_per_zip: 100
 
 wiki:
   enabled: false  # Skip wiki data
