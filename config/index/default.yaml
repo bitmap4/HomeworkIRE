@@ -1,0 +1,17 @@
+es_index:
+  refresh_interval: "1s"
+  number_of_shards: 1
+  number_of_replicas: 0
+
+datastores:
+  custom:
+    storage_path: indices/custom
+  postgres:
+    table_name: inverted_index
+  redis:
+    db: 0
+    key_prefix: "idx:"
+
+compression:
+  zstd:
+    level: 3
