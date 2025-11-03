@@ -1,0 +1,28 @@
+defaults:
+  - data: default
+  - index: default
+  - preprocessing: default
+  - metrics: default
+  - _self_
+
+elasticsearch:
+  host: ${oc.env:ES_HOST}
+  port: ${oc.env:ES_PORT}
+
+postgres:
+  host: ${oc.env:POSTGRES_HOST}
+  port: ${oc.env:POSTGRES_PORT}
+  database: ${oc.env:POSTGRES_DB}
+  user: ${oc.env:POSTGRES_USER}
+  password: ${oc.env:POSTGRES_PASSWORD}
+
+redis:
+  host: ${oc.env:REDIS_HOST}
+  port: ${oc.env:REDIS_PORT}
+
+paths:
+  news_dir: indexing_and_retrieval/data/free-news-datasets/News_Datasets
+  wiki_file: indexing_and_retrieval/data/20231101.en/train-00006-of-00041.parquet
+  indices_dir: indices
+  plots_dir: plots
+  metrics_dir: metrics

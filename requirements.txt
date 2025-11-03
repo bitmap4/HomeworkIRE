@@ -1,0 +1,16 @@
+elasticsearch
+elasticsearch-dsl
+nltk
+numpy
+pandas
+matplotlib
+seaborn
+hydra-core
+omegaconf
+psycopg2-binary
+redis
+pyarrow
+tqdm
+psutil
+zstandard
+python-dotenv

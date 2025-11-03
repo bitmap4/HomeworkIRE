@@ -1,0 +1,9 @@
+lowercase: true
+remove_punctuation: true
+min_token_length: 2
+stemming: porter
+stopwords: english
+
+plots:
+  top_n: 50
+  log_scale: true
