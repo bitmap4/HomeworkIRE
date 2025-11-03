@@ -16,9 +16,12 @@ class ESIndex(IndexBase):
         self.config = config
         self.preprocessor = TextPreprocessor(config.preprocessing)
         
-        self.client = Elasticsearch([
-            f"http://{config.elasticsearch.host}:{config.elasticsearch.port}"
-        ])
+        self.client = Elasticsearch(
+            [f"http://{config.elasticsearch.host}:{config.elasticsearch.port}"],
+            request_timeout=30,  # Increase default timeout to 30 seconds
+            max_retries=3,
+            retry_on_timeout=True
+        )
         
         self.index_name = None
     
@@ -58,8 +61,30 @@ class ESIndex(IndexBase):
             }
         }
         
-        self.client.indices.create(index=self.index_name, body=index_settings)
+        # Create index with increased timeout
+        print(f"Creating index {self.index_name}...")
         
+        # If index exists, delete it first (handles stale/incomplete indices)
+        if self.client.indices.exists(index=self.index_name):
+            print(f"Deleting existing index {self.index_name}...")
+            self.client.indices.delete(index=self.index_name)
+        
+        try:
+            self.client.indices.create(
+                index=self.index_name, 
+                body=index_settings,
+                timeout='60s'  # Increased timeout
+            )
+            print(f"Index {self.index_name} created successfully")
+        except Exception as e:
+            print(f"Warning: Index creation had issues: {e}")
+            # Check if index was actually created despite the error
+            if self.client.indices.exists(index=self.index_name):
+                print(f"Index {self.index_name} exists despite error, continuing...")
+            else:
+                raise
+        
+        print(f"Bulk indexing {len(files)} documents...")
         def generate_docs():
             for file_id, content in files:
                 yield {
@@ -70,7 +95,14 @@ class ESIndex(IndexBase):
                     "content_raw": content
                 }
         
-        success, failed = bulk(self.client, generate_docs(), raise_on_error=False)
+        # Use bulk with chunking and timeout
+        success, failed = bulk(
+            self.client, 
+            generate_docs(), 
+            chunk_size=500,  # Process in smaller chunks
+            request_timeout=30,  # Increase timeout
+            raise_on_error=False
+        )
         
         self.client.indices.refresh(index=self.index_name)
         

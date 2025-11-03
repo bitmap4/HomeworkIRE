@@ -15,19 +15,27 @@ class PerformanceMetrics:
     
     def measure_latency(self, query_func: Callable, queries: List[str], 
                        num_warmup: int = 5, num_iterations: int = 100) -> Dict:
-        print(f"Measuring latency with {num_warmup} warmup and {num_iterations} iterations...")
+        print(f"  Warmup ({num_warmup} queries)...", end='', flush=True)
         
-        for query in queries[:num_warmup]:
-            query_func(query)
+        # Warmup phase - just a few queries
+        for i in range(min(num_warmup, len(queries))):
+            query_func(queries[i])
+        print(" Done", flush=True)
         
+        print(f"  Measuring latency ({num_iterations} iterations)...", end='', flush=True)
         latencies = []
-        for _ in range(num_iterations):
-            for query in queries:
-                start_time = time.perf_counter()
-                query_func(query)
-                end_time = time.perf_counter()
-                latencies.append((end_time - start_time) * 1000)
+        for i in range(num_iterations):
+            query = queries[i % len(queries)]  # Cycle through queries
+            start_time = time.perf_counter()
+            query_func(query)
+            end_time = time.perf_counter()
+            latencies.append((end_time - start_time) * 1000)
+            
+            # Progress indicator
+            if (i + 1) % 5 == 0:
+                print('.', end='', flush=True)
         
+        print(" Done", flush=True)
         latencies_sorted = sorted(latencies)
         
         return {
@@ -44,7 +52,7 @@ class PerformanceMetrics:
     
     def measure_throughput(self, query_func: Callable, queries: List[str], 
                           duration_seconds: int = 10) -> Dict:
-        print(f"Measuring throughput for {duration_seconds} seconds...")
+        print(f"Measuring throughput for {duration_seconds} seconds...", end='', flush=True)
         
         start_time = time.time()
         end_time = start_time + duration_seconds
@@ -58,10 +66,14 @@ class PerformanceMetrics:
                 query_func(query)
                 query_count += 1
                 query_idx += 1
+                # Print progress every 10 queries
+                if query_count % 10 == 0:
+                    print('.', end='', flush=True)
             except Exception as e:
-                print(f"Warning: Query failed during throughput test: {e}")
+                print(f"\nWarning: Query failed during throughput test: {e}")
                 break
         
+        print()  # New line after completion
         actual_duration = time.time() - start_time
         throughput = query_count / actual_duration if actual_duration > 0 else 0
         
@@ -100,86 +112,270 @@ class PerformanceMetrics:
             'relevant_count': len(relevant)
         }
     
+    def compute_precision_recall_vs_ground_truth(self, index_obj, ground_truth_index, 
+                                                  queries: List[str]) -> Dict:
+        """
+        Compute precision/recall metrics by comparing index results against ground truth (ESIndex).
+        
+        Args:
+            index_obj: The index to evaluate
+            ground_truth_index: The ground truth index (typically ESIndex)
+            queries: List of queries to test
+            
+        Returns:
+            Dictionary with average precision, recall, and F1 scores
+        """
+        precisions = []
+        recalls = []
+        f1_scores = []
+        
+        for query in queries:
+            try:
+                # Get results from both indices
+                retrieved = set(index_obj.query(query))
+                ground_truth = set(ground_truth_index.query(query))
+                
+                # Compute metrics
+                metrics = self.compute_precision_recall(retrieved, ground_truth)
+                precisions.append(metrics['precision'])
+                recalls.append(metrics['recall'])
+                f1_scores.append(metrics['f1'])
+            except Exception as e:
+                print(f"Warning: Query '{query}' failed: {e}")
+                continue
+        
+        return {
+            'avg_precision': sum(precisions) / len(precisions) if precisions else 0.0,
+            'avg_recall': sum(recalls) / len(recalls) if recalls else 0.0,
+            'avg_f1': sum(f1_scores) / len(f1_scores) if f1_scores else 0.0,
+            'num_queries': len(precisions)
+        }
+    
     def save_metrics(self, metrics: Dict, filename: str):
         output_path = self.output_dir / filename
         with open(output_path, 'w') as f:
             json.dump(metrics, f, indent=2)
         print(f"Metrics saved to {output_path}")
     
-    def plot_by_info_type(self, metrics_data: Dict[str, Dict], metric_name: str, filename: str):
-        """Plot.C for x=n: Compare different information types (BOOLEAN, WORDCOUNT, TFIDF)"""
-        # Extract variants that differ only in info type
+    def plot_by_info_type(self, latency_metrics: Dict, throughput_metrics: Dict, 
+                          memory_metrics: Dict, functional_metrics: Dict, output_file: str):
+        """
+        Plot comparison by information type (BOOLEAN=1, WORDCOUNT=2, TFIDF=3).
+        Each plot shows A: Latency, B: Throughput, C: Memory, D: Precision/Recall.
+        Includes ESIndex as baseline comparison.
+        """
+        # Filter variants by information type
+        info_types = ['BOOLEAN', 'WORDCOUNT', 'TFIDF']
+        info_labels = {'BOOLEAN': 'Boolean', 'WORDCOUNT': 'WordCount', 'TFIDF': 'TF-IDF', 'ESIndex': 'ESIndex'}
+        
         variants = {}
-        for key, value in metrics_data.items():
-            if key.startswith('SelfIndex-v1.'):
-                info_type = key.split('.')[1][0]  # Extract x from v1.xyziq
-                variants[info_type] = value
+        # Add SelfIndex variants
+        for info in info_types:
+            key = f'SelfIndex-v1.{info_types.index(info)+1}110T'  # Base config with varying info type
+            if key in latency_metrics:
+                variants[info] = {
+                    'latency': latency_metrics[key],
+                    'throughput': throughput_metrics[key],
+                    'memory': memory_metrics[key],
+                    'functional': functional_metrics.get(key, {})
+                }
+        
+        # Add ESIndex
+        if 'ESIndex' in latency_metrics:
+            variants['ESIndex'] = {
+                'latency': latency_metrics['ESIndex'],
+                'throughput': throughput_metrics['ESIndex'],
+                'memory': memory_metrics['ESIndex'],
+                'functional': {'avg_precision': 1.0, 'avg_recall': 1.0, 'avg_f1': 1.0}  # Ground truth
+            }
         
         if not variants:
-            print(f"Warning: No variants found for info type comparison")
+            print(f"Warning: No data for info type comparison")
             return
         
-        fig, ax = plt.subplots(figsize=(10, 6))
-        info_labels = {'1': 'Boolean', '2': 'WordCount', '3': 'TF-IDF'}
+        # Create 2x2 subplot
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle('Plot.C - Comparison by Information Type (vs ESIndex)', fontsize=14, fontweight='bold')
         
-        sorted_keys = sorted(variants.keys())
+        sorted_keys = sorted(variants.keys(), key=lambda x: (x != 'ESIndex', info_types.index(x) if x in info_types else -1))
         x_pos = np.arange(len(sorted_keys))
-        values = [variants[k][metric_name] for k in sorted_keys]
         
-        bars = ax.bar(x_pos, values, alpha=0.8, color='steelblue')
+        # Plot A: Latency with P95 and P99
+        ax = axes[0, 0]
+        means = [variants[k]['latency'].get('mean', 0) for k in sorted_keys]
+        p95s = [variants[k]['latency'].get('p95', 0) for k in sorted_keys]
+        p99s = [variants[k]['latency'].get('p99', 0) for k in sorted_keys]
         
-        # Add value labels on bars
-        for bar, val in zip(bars, values):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height,
-                   f'{val:.1f}',
-                   ha='center', va='bottom', fontsize=10)
+        width = 0.25
+        ax.bar(x_pos - width, means, width, label='Mean', alpha=0.8, color='steelblue')
+        ax.bar(x_pos, p95s, width, label='P95', alpha=0.8, color='orange')
+        ax.bar(x_pos + width, p99s, width, label='P99', alpha=0.8, color='red')
         
-        ax.set_xlabel('Information Type (x)', fontsize=12)
-        ax.set_ylabel(f'{metric_name.capitalize()} (MB)', fontsize=12)
-        ax.set_title(f'Plot.C: Memory Footprint by Information Type', fontsize=14)
+        ax.set_xlabel('Index Type', fontsize=11)
+        ax.set_ylabel('Latency (ms)', fontsize=11)
+        ax.set_title('A: System Response Time (Latency)', fontsize=12, fontweight='bold')
         ax.set_xticks(x_pos)
-        ax.set_xticklabels([info_labels[k] for k in sorted_keys])
+        ax.set_xticklabels([info_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Plot B: Throughput
+        ax = axes[0, 1]
+        throughputs = [variants[k]['throughput'].get('queries_per_second', 0) for k in sorted_keys]
+        bars = ax.bar(x_pos, throughputs, alpha=0.8, color='green')
+        for bar, val in zip(bars, throughputs):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                   f'{val:.2f}', ha='center', va='bottom', fontsize=9)
+        
+        ax.set_xlabel('Index Type', fontsize=11)
+        ax.set_ylabel('Queries/Second', fontsize=11)
+        ax.set_title('B: System Throughput', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([info_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Plot C: Memory Footprint
+        ax = axes[1, 0]
+        memory = [variants[k]['memory'].get('rss_mb', 0) for k in sorted_keys]
+        bars = ax.bar(x_pos, memory, alpha=0.8, color='purple')
+        for bar, val in zip(bars, memory):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                   f'{val:.1f}', ha='center', va='bottom', fontsize=9)
+        
+        ax.set_xlabel('Index Type', fontsize=11)
+        ax.set_ylabel('Memory (MB)', fontsize=11)
+        ax.set_title('C: Memory Footprint', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([info_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Plot D: Precision/Recall/F1 (using ESIndex as ground truth)
+        ax = axes[1, 1]
+        precisions = [variants[k]['functional'].get('avg_precision', 0) * 100 for k in sorted_keys]
+        recalls = [variants[k]['functional'].get('avg_recall', 0) * 100 for k in sorted_keys]
+        f1s = [variants[k]['functional'].get('avg_f1', 0) * 100 for k in sorted_keys]
+        
+        width = 0.25
+        ax.bar(x_pos - width, precisions, width, label='Precision', alpha=0.8, color='cyan')
+        ax.bar(x_pos, recalls, width, label='Recall', alpha=0.8, color='magenta')
+        ax.bar(x_pos + width, f1s, width, label='F1-Score', alpha=0.8, color='gold')
+        
+        ax.set_xlabel('Index Type', fontsize=11)
+        ax.set_ylabel('Score (%)', fontsize=11)
+        ax.set_title('D: Functional Metrics (vs ESIndex)', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([info_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.legend()
         ax.grid(axis='y', alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(self.output_dir / filename, dpi=300, bbox_inches='tight')
+        plt.savefig(self.output_dir / output_file, dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"Plot saved: {filename}")
+        print(f"Plot saved: {output_file}")
     
-    def plot_by_datastore(self, metrics_data: Dict[str, Dict], metric_name: str, filename: str):
-        """Plot.A for y=n: Compare datastore choices (CUSTOM, DB1, DB2)"""
+    def plot_by_datastore(self, all_latency: Dict, all_throughput: Dict, all_memory: Dict, 
+                          all_functional: Dict, filename: str):
+        """Plot.A for y=n: Compare datastore choices (CUSTOM, DB1, DB2)
+        Shows all 4 metrics: A (latency), B (throughput), C (memory), D (functional metrics)"""
+        
         variants = {}
-        for key, value in metrics_data.items():
+        for key in all_latency.keys():
             if key.startswith('SelfIndex-v1.'):
                 dstore_type = key.split('.')[1][1]  # Extract y from v1.xyziq
-                variants[dstore_type] = value
+                if dstore_type not in variants:
+                    variants[dstore_type] = {
+                        'latency': all_latency.get(key, {}),
+                        'throughput': all_throughput.get(key, {}),
+                        'memory': all_memory.get(key, {}),
+                        'functional': all_functional.get(key, {})
+                    }
+        
+        # Add ESIndex
+        if 'ESIndex' in all_latency:
+            variants['ESIndex'] = {
+                'latency': all_latency['ESIndex'],
+                'throughput': all_throughput['ESIndex'],
+                'memory': all_memory['ESIndex'],
+                'functional': {'avg_precision': 1.0, 'avg_recall': 1.0, 'avg_f1': 1.0}
+            }
         
         if not variants:
             print(f"Warning: No variants found for datastore comparison")
             return
         
-        fig, ax = plt.subplots(figsize=(10, 6))
-        dstore_labels = {'1': 'Custom Disk', '2': 'PostgreSQL', '3': 'Redis'}
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('Plot.A - Comparison by Datastore Type (vs ESIndex)', fontsize=14, fontweight='bold')
         
-        sorted_keys = sorted(variants.keys())
+        dstore_labels = {'1': 'Custom Disk', '2': 'PostgreSQL', '3': 'Redis', 'ESIndex': 'ESIndex'}
+        sorted_keys = sorted(variants.keys(), key=lambda x: (x != 'ESIndex', x))
         x_pos = np.arange(len(sorted_keys))
-        values = [variants[k][metric_name] for k in sorted_keys]
         
-        bars = ax.bar(x_pos, values, alpha=0.8, color='coral')
+        # Plot A: Latency
+        ax = axes[0, 0]
+        means = [variants[k]['latency'].get('mean', 0) for k in sorted_keys]
+        p95s = [variants[k]['latency'].get('p95', 0) for k in sorted_keys]
+        p99s = [variants[k]['latency'].get('p99', 0) for k in sorted_keys]
         
-        # Add value labels on bars
-        for bar, val in zip(bars, values):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height,
-                   f'{val:.2f}',
-                   ha='center', va='bottom', fontsize=10)
+        width = 0.25
+        ax.bar(x_pos - width, means, width, label='Mean', alpha=0.8, color='steelblue')
+        ax.bar(x_pos, p95s, width, label='P95', alpha=0.8, color='orange')
+        ax.bar(x_pos + width, p99s, width, label='P99', alpha=0.8, color='red')
         
-        ax.set_xlabel('Datastore Type (y)', fontsize=12)
-        ax.set_ylabel(f'{metric_name.upper() if metric_name in ["p95", "p99"] else metric_name.capitalize()} (ms)', fontsize=12)
-        ax.set_title(f'Plot.A: Latency by Datastore Type', fontsize=14)
+        ax.set_xlabel('Datastore Type', fontsize=11)
+        ax.set_ylabel('Latency (ms)', fontsize=11)
+        ax.set_title('A: System Response Time (Latency)', fontsize=12, fontweight='bold')
         ax.set_xticks(x_pos)
         ax.set_xticklabels([dstore_labels[k] for k in sorted_keys])
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Plot B: Throughput
+        ax = axes[0, 1]
+        throughputs = [variants[k]['throughput'].get('queries_per_second', 0) for k in sorted_keys]
+        bars = ax.bar(x_pos, throughputs, alpha=0.8, color='green')
+        for bar, val in zip(bars, throughputs):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                   f'{val:.2f}', ha='center', va='bottom', fontsize=9)
+        
+        ax.set_xlabel('Datastore Type', fontsize=11)
+        ax.set_ylabel('Queries/Second', fontsize=11)
+        ax.set_title('B: System Throughput', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([dstore_labels[k] for k in sorted_keys])
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Plot C: Memory Footprint
+        ax = axes[1, 0]
+        memory = [variants[k]['memory'].get('rss_mb', 0) for k in sorted_keys]
+        bars = ax.bar(x_pos, memory, alpha=0.8, color='purple')
+        for bar, val in zip(bars, memory):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                   f'{val:.1f}', ha='center', va='bottom', fontsize=9)
+        
+        ax.set_xlabel('Datastore Type', fontsize=11)
+        ax.set_ylabel('Memory (MB)', fontsize=11)
+        ax.set_title('C: Memory Footprint', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([dstore_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Plot D: Functional Metrics
+        ax = axes[1, 1]
+        precisions = [variants[k]['functional'].get('avg_precision', 0) * 100 for k in sorted_keys]
+        recalls = [variants[k]['functional'].get('avg_recall', 0) * 100 for k in sorted_keys]
+        f1s = [variants[k]['functional'].get('avg_f1', 0) * 100 for k in sorted_keys]
+        
+        width = 0.25
+        ax.bar(x_pos - width, precisions, width, label='Precision', alpha=0.8, color='cyan')
+        ax.bar(x_pos, recalls, width, label='Recall', alpha=0.8, color='magenta')
+        ax.bar(x_pos + width, f1s, width, label='F1-Score', alpha=0.8, color='gold')
+        
+        ax.set_xlabel('Datastore Type', fontsize=11)
+        ax.set_ylabel('Score (%)', fontsize=11)
+        ax.set_title('D: Functional Metrics (vs ESIndex)', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([dstore_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.legend()
         ax.grid(axis='y', alpha=0.3)
         
         plt.tight_layout()
@@ -187,102 +383,223 @@ class PerformanceMetrics:
         plt.close()
         print(f"Plot saved: {filename}")
     
-    def plot_by_compression(self, metrics_data: Dict[str, Dict], latency_metric: str, throughput_metric: str, filename: str):
-        """Plot.AB for z=n: Compare compression methods"""
-        variants = {}
+    def plot_by_compression(self, all_latency: Dict, all_throughput: Dict, all_memory: Dict, 
+                            all_functional: Dict, filename: str):
+        """Plot.AB for z=n: Compare compression methods (NONE, CODE, CLIB)
+        Shows all 4 metrics: A (latency), B (throughput), C (memory), D (functional metrics)"""
         
-        for key in metrics_data.keys():
+        variants = {}
+        for key in all_latency.keys():
             if key.startswith('SelfIndex-v1.'):
                 compr_type = key.split('.')[1][2]  # Extract z from v1.xyziq
-                variants[compr_type] = metrics_data[key]
+                if compr_type not in variants:
+                    variants[compr_type] = {
+                        'latency': all_latency.get(key, {}),
+                        'throughput': all_throughput.get(key, {}),
+                        'memory': all_memory.get(key, {}),
+                        'functional': all_functional.get(key, {})
+                    }
+        
+        # Add ESIndex
+        if 'ESIndex' in all_latency:
+            variants['ESIndex'] = {
+                'latency': all_latency['ESIndex'],
+                'throughput': all_throughput['ESIndex'],
+                'memory': all_memory['ESIndex'],
+                'functional': {'avg_precision': 1.0, 'avg_recall': 1.0, 'avg_f1': 1.0}
+            }
         
         if not variants:
             print(f"Warning: No variants found for compression comparison")
             return
         
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-        compr_labels = {'1': 'None', '2': 'VarByte', '3': 'Zstd'}
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('Plot.AB - Comparison by Compression Method (vs ESIndex)', fontsize=14, fontweight='bold')
         
-        sorted_keys = sorted(variants.keys())
+        compr_labels = {'1': 'None', '2': 'VarByte', '3': 'Zstd', 'ESIndex': 'ESIndex'}
+        sorted_keys = sorted(variants.keys(), key=lambda x: (x != 'ESIndex', x))
         x_pos = np.arange(len(sorted_keys))
         
-        # Plot latency
-        lat_values = [variants[k][latency_metric] for k in sorted_keys]
-        bars1 = ax1.bar(x_pos, lat_values, alpha=0.8, color='steelblue')
+        # Plot A: Latency
+        ax = axes[0, 0]
+        means = [variants[k]['latency'].get('mean', 0) for k in sorted_keys]
+        p95s = [variants[k]['latency'].get('p95', 0) for k in sorted_keys]
+        p99s = [variants[k]['latency'].get('p99', 0) for k in sorted_keys]
         
-        for bar, val in zip(bars1, lat_values):
-            height = bar.get_height()
-            ax1.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{val:.2f}',
-                    ha='center', va='bottom', fontsize=10)
+        width = 0.25
+        ax.bar(x_pos - width, means, width, label='Mean', alpha=0.8, color='steelblue')
+        ax.bar(x_pos, p95s, width, label='P95', alpha=0.8, color='orange')
+        ax.bar(x_pos + width, p99s, width, label='P99', alpha=0.8, color='red')
         
-        ax1.set_xlabel('Compression Type (z)', fontsize=12)
-        ax1.set_ylabel('Latency (ms)', fontsize=12)
-        ax1.set_title('Latency by Compression', fontsize=12)
-        ax1.set_xticks(x_pos)
-        ax1.set_xticklabels([compr_labels[k] for k in sorted_keys])
-        ax1.grid(axis='y', alpha=0.3)
+        ax.set_xlabel('Compression Type', fontsize=11)
+        ax.set_ylabel('Latency (ms)', fontsize=11)
+        ax.set_title('A: System Response Time (Latency)', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([compr_labels[k] for k in sorted_keys])
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
         
-        # Plot throughput
-        thr_values = [variants[k][throughput_metric] for k in sorted_keys]
-        bars2 = ax2.bar(x_pos, thr_values, alpha=0.8, color='coral')
+        # Plot B: Throughput
+        ax = axes[0, 1]
+        throughputs = [variants[k]['throughput'].get('queries_per_second', 0) for k in sorted_keys]
+        bars = ax.bar(x_pos, throughputs, alpha=0.8, color='green')
+        for bar, val in zip(bars, throughputs):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                   f'{val:.2f}', ha='center', va='bottom', fontsize=9)
         
-        for bar, val in zip(bars2, thr_values):
-            height = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{val:.1f}',
-                    ha='center', va='bottom', fontsize=10)
+        ax.set_xlabel('Compression Type', fontsize=11)
+        ax.set_ylabel('Queries/Second', fontsize=11)
+        ax.set_title('B: System Throughput', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([compr_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.grid(axis='y', alpha=0.3)
         
-        ax2.set_xlabel('Compression Type (z)', fontsize=12)
-        ax2.set_ylabel('Queries/Second', fontsize=12)
-        ax2.set_title('Throughput by Compression', fontsize=12)
-        ax2.set_xticks(x_pos)
-        ax2.set_xticklabels([compr_labels[k] for k in sorted_keys])
-        ax2.grid(axis='y', alpha=0.3)
+        # Plot C: Memory Footprint
+        ax = axes[1, 0]
+        memory = [variants[k]['memory'].get('rss_mb', 0) for k in sorted_keys]
+        bars = ax.bar(x_pos, memory, alpha=0.8, color='purple')
+        for bar, val in zip(bars, memory):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                   f'{val:.1f}', ha='center', va='bottom', fontsize=9)
         
-        plt.suptitle('Plot.AB: Compression Methods Comparison', fontsize=14, y=1.02)
+        ax.set_xlabel('Compression Type', fontsize=11)
+        ax.set_ylabel('Memory (MB)', fontsize=11)
+        ax.set_title('C: Memory Footprint', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([compr_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Plot D: Functional Metrics
+        ax = axes[1, 1]
+        precisions = [variants[k]['functional'].get('avg_precision', 0) * 100 for k in sorted_keys]
+        recalls = [variants[k]['functional'].get('avg_recall', 0) * 100 for k in sorted_keys]
+        f1s = [variants[k]['functional'].get('avg_f1', 0) * 100 for k in sorted_keys]
+        
+        width = 0.25
+        ax.bar(x_pos - width, precisions, width, label='Precision', alpha=0.8, color='cyan')
+        ax.bar(x_pos, recalls, width, label='Recall', alpha=0.8, color='magenta')
+        ax.bar(x_pos + width, f1s, width, label='F1-Score', alpha=0.8, color='gold')
+        
+        ax.set_xlabel('Compression Type', fontsize=11)
+        ax.set_ylabel('Score (%)', fontsize=11)
+        ax.set_title('D: Functional Metrics (vs ESIndex)', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([compr_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        
         plt.tight_layout()
         plt.savefig(self.output_dir / filename, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"Plot saved: {filename}")
     
-    def plot_by_skip_pointers(self, metrics_data: Dict[str, Dict], metric_name: str, filename: str):
-        """Plot.A for i=0/1: Compare with/without skip pointers (only for TERMatat)"""
+    def plot_by_skip_pointers(self, all_latency: Dict, all_throughput: Dict, all_memory: Dict, 
+                              all_functional: Dict, filename: str):
+        """Plot.A for i=0/1: Compare with/without skip pointers (only for TERMatat)
+        Shows all 4 metrics: A (latency), B (throughput), C (memory), D (functional metrics)"""
+        
         variants = {}
-        for key, value in metrics_data.items():
+        for key in all_latency.keys():
             if key.startswith('SelfIndex-v1.'):
                 parts = key.split('.')[1]
                 skip = parts[3]  # Extract i from v1.xyziq
                 qproc = parts[4]  # Extract q from v1.xyziq
                 # Only compare for Term-at-a-time
                 if qproc == 'T':
-                    variants[skip] = value
+                    if skip not in variants:
+                        variants[skip] = {
+                            'latency': all_latency.get(key, {}),
+                            'throughput': all_throughput.get(key, {}),
+                            'memory': all_memory.get(key, {}),
+                            'functional': all_functional.get(key, {})
+                        }
+        
+        # Add ESIndex
+        if 'ESIndex' in all_latency:
+            variants['ESIndex'] = {
+                'latency': all_latency['ESIndex'],
+                'throughput': all_throughput['ESIndex'],
+                'memory': all_memory['ESIndex'],
+                'functional': {'avg_precision': 1.0, 'avg_recall': 1.0, 'avg_f1': 1.0}
+            }
         
         if not variants:
             print(f"Warning: No variants found for skip pointers comparison")
             return
         
-        fig, ax = plt.subplots(figsize=(10, 6))
-        skip_labels = {'0': 'Without Skip Pointers', '1': 'With Skip Pointers'}
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('Plot.A - Comparison with/without Skip Pointers (vs ESIndex)', fontsize=14, fontweight='bold')
         
-        sorted_keys = sorted(variants.keys())
+        skip_labels = {'0': 'No Skip Pointers', '1': 'Skip Pointers', 'ESIndex': 'ESIndex'}
+        sorted_keys = sorted(variants.keys(), key=lambda x: (x != 'ESIndex', x))
         x_pos = np.arange(len(sorted_keys))
-        values = [variants[k][metric_name] for k in sorted_keys]
         
-        bars = ax.bar(x_pos, values, alpha=0.8, color='green')
+        # Plot A: Latency
+        ax = axes[0, 0]
+        means = [variants[k]['latency'].get('mean', 0) for k in sorted_keys]
+        p95s = [variants[k]['latency'].get('p95', 0) for k in sorted_keys]
+        p99s = [variants[k]['latency'].get('p99', 0) for k in sorted_keys]
         
-        # Add value labels on bars
-        for bar, val in zip(bars, values):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height,
-                   f'{val:.2f}',
-                   ha='center', va='bottom', fontsize=10)
+        width = 0.25
+        ax.bar(x_pos - width, means, width, label='Mean', alpha=0.8, color='steelblue')
+        ax.bar(x_pos, p95s, width, label='P95', alpha=0.8, color='orange')
+        ax.bar(x_pos + width, p99s, width, label='P99', alpha=0.8, color='red')
         
-        ax.set_xlabel('Optimization (i)', fontsize=12)
-        ax.set_ylabel(f'{metric_name.upper() if metric_name in ["p95", "p99"] else metric_name.capitalize()} (ms)', fontsize=12)
-        ax.set_title(f'Plot.A: Impact of Skip Pointers (Term-at-a-Time)', fontsize=14)
+        ax.set_xlabel('Skip Pointers', fontsize=11)
+        ax.set_ylabel('Latency (ms)', fontsize=11)
+        ax.set_title('A: System Response Time (Latency)', fontsize=12, fontweight='bold')
         ax.set_xticks(x_pos)
-        ax.set_xticklabels([skip_labels[k] for k in sorted_keys])
+        ax.set_xticklabels([skip_labels.get(k, k) for k in sorted_keys])
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Plot B: Throughput
+        ax = axes[0, 1]
+        throughputs = [variants[k]['throughput'].get('queries_per_second', 0) for k in sorted_keys]
+        bars = ax.bar(x_pos, throughputs, alpha=0.8, color='green')
+        for bar, val in zip(bars, throughputs):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                   f'{val:.2f}', ha='center', va='bottom', fontsize=9)
+        
+        ax.set_xlabel('Skip Pointers', fontsize=11)
+        ax.set_ylabel('Queries/Second', fontsize=11)
+        ax.set_title('B: System Throughput', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([skip_labels.get(k, k) for k in sorted_keys])
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Plot C: Memory Footprint
+        ax = axes[1, 0]
+        memory = [variants[k]['memory'].get('rss_mb', 0) for k in sorted_keys]
+        bars = ax.bar(x_pos, memory, alpha=0.8, color='purple')
+        for bar, val in zip(bars, memory):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                   f'{val:.1f}', ha='center', va='bottom', fontsize=9)
+        
+        ax.set_xlabel('Skip Pointers', fontsize=11)
+        ax.set_ylabel('Memory (MB)', fontsize=11)
+        ax.set_title('C: Memory Footprint', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([skip_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Plot D: Functional Metrics
+        ax = axes[1, 1]
+        precisions = [variants[k]['functional'].get('avg_precision', 0) * 100 for k in sorted_keys]
+        recalls = [variants[k]['functional'].get('avg_recall', 0) * 100 for k in sorted_keys]
+        f1s = [variants[k]['functional'].get('avg_f1', 0) * 100 for k in sorted_keys]
+        
+        width = 0.25
+        ax.bar(x_pos - width, precisions, width, label='Precision', alpha=0.8, color='cyan')
+        ax.bar(x_pos, recalls, width, label='Recall', alpha=0.8, color='magenta')
+        ax.bar(x_pos + width, f1s, width, label='F1-Score', alpha=0.8, color='gold')
+        
+        ax.set_xlabel('Skip Pointers', fontsize=11)
+        ax.set_ylabel('Score (%)', fontsize=11)
+        ax.set_title('D: Functional Metrics (vs ESIndex)', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([skip_labels.get(k, k) for k in sorted_keys], rotation=15, ha='right')
+        ax.legend()
         ax.grid(axis='y', alpha=0.3)
         
         plt.tight_layout()
@@ -290,69 +607,114 @@ class PerformanceMetrics:
         plt.close()
         print(f"Plot saved: {filename}")
     
-    def plot_by_query_processing(self, metrics_data: Dict[str, Dict], latency_metric: str, memory_metric: str, filename: str):
-        """Plot.AC for q=Tn/Dn: Compare Term-at-a-time vs Document-at-a-time"""
-        variants = {}
+    def plot_by_query_processing(self, all_latency: Dict, all_throughput: Dict, all_memory: Dict, 
+                                  all_functional: Dict, filename: str):
+        """Plot.AC for q=T/D: Compare Term-at-a-time vs Document-at-a-time
+        Shows all 4 metrics: A (latency), B (throughput), C (memory), D (functional metrics)"""
         
-        for key in metrics_data.keys():
+        variants = {}
+        for key in all_latency.keys():
             if key.startswith('SelfIndex-v1.'):
                 parts = key.split('.')[1]
                 qproc = parts[4]  # Extract q from v1.xyziq
-                skip = parts[3]   # Extract i from v1.xyziq
                 
-                # Create label with optimization info
-                if qproc == 'T':
-                    label = f'T{skip}'  # Tn where n is 0 or 1 for skip pointers
-                else:
-                    label = 'D0'  # Document-at-a-time doesn't use skip pointers
+                label = 'Term-at-a-time' if qproc == 'T' else 'Document-at-a-time'
                 
-                variants[label] = metrics_data[key]
+                if label not in variants:
+                    variants[label] = {
+                        'latency': all_latency.get(key, {}),
+                        'throughput': all_throughput.get(key, {}),
+                        'memory': all_memory.get(key, {}),
+                        'functional': all_functional.get(key, {})
+                    }
+        
+        # Add ESIndex
+        if 'ESIndex' in all_latency:
+            variants['ESIndex'] = {
+                'latency': all_latency['ESIndex'],
+                'throughput': all_throughput['ESIndex'],
+                'memory': all_memory['ESIndex'],
+                'functional': {'avg_precision': 1.0, 'avg_recall': 1.0, 'avg_f1': 1.0}
+            }
         
         if not variants:
             print(f"Warning: No variants found for query processing comparison")
             return
         
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('Plot.AC - Comparison by Query Processing (vs ESIndex)', fontsize=14, fontweight='bold')
         
-        # Sort by label to ensure consistent ordering
-        sorted_labels = sorted(variants.keys())
+        sorted_labels = sorted(variants.keys(), key=lambda x: (x != 'ESIndex', x))
         x_pos = np.arange(len(sorted_labels))
         
-        # Plot latency
-        lat_values = [variants[k][latency_metric] for k in sorted_labels]
-        bars1 = ax1.bar(x_pos, lat_values, alpha=0.8, color='steelblue')
+        # Plot A: Latency
+        ax = axes[0, 0]
+        means = [variants[k]['latency'].get('mean', 0) for k in sorted_labels]
+        p95s = [variants[k]['latency'].get('p95', 0) for k in sorted_labels]
+        p99s = [variants[k]['latency'].get('p99', 0) for k in sorted_labels]
         
-        for bar, val in zip(bars1, lat_values):
-            height = bar.get_height()
-            ax1.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{val:.2f}',
-                    ha='center', va='bottom', fontsize=10)
+        width = 0.25
+        ax.bar(x_pos - width, means, width, label='Mean', alpha=0.8, color='steelblue')
+        ax.bar(x_pos, p95s, width, label='P95', alpha=0.8, color='orange')
+        ax.bar(x_pos + width, p99s, width, label='P99', alpha=0.8, color='red')
         
-        ax1.set_xlabel('Query Processing (q)', fontsize=12)
-        ax1.set_ylabel('Latency (ms)', fontsize=12)
-        ax1.set_title('Latency by Query Processing', fontsize=12)
-        ax1.set_xticks(x_pos)
-        ax1.set_xticklabels(sorted_labels)
-        ax1.grid(axis='y', alpha=0.3)
+        ax.set_xlabel('Query Processing Strategy', fontsize=11)
+        ax.set_ylabel('Latency (ms)', fontsize=11)
+        ax.set_title('A: System Response Time (Latency)', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(sorted_labels, rotation=15, ha='right')
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
         
-        # Plot memory
-        mem_values = [variants[k][memory_metric] for k in sorted_labels]
-        bars2 = ax2.bar(x_pos, mem_values, alpha=0.8, color='coral')
+        # Plot B: Throughput
+        ax = axes[0, 1]
+        throughputs = [variants[k]['throughput'].get('queries_per_second', 0) for k in sorted_labels]
+        bars = ax.bar(x_pos, throughputs, alpha=0.8, color='green')
+        for bar, val in zip(bars, throughputs):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                   f'{val:.2f}', ha='center', va='bottom', fontsize=9)
         
-        for bar, val in zip(bars2, mem_values):
-            height = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{val:.1f}',
-                    ha='center', va='bottom', fontsize=10)
+        ax.set_xlabel('Query Processing Strategy', fontsize=11)
+        ax.set_ylabel('Queries/Second', fontsize=11)
+        ax.set_title('B: System Throughput', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(sorted_labels, rotation=15, ha='right')
+        ax.grid(axis='y', alpha=0.3)
         
-        ax2.set_xlabel('Query Processing (q)', fontsize=12)
-        ax2.set_ylabel('Memory (MB)', fontsize=12)
-        ax2.set_title('Memory by Query Processing', fontsize=12)
-        ax2.set_xticks(x_pos)
-        ax2.set_xticklabels(sorted_labels)
-        ax2.grid(axis='y', alpha=0.3)
+        # Plot C: Memory Footprint
+        ax = axes[1, 0]
+        memory = [variants[k]['memory'].get('rss_mb', 0) for k in sorted_labels]
+        bars = ax.bar(x_pos, memory, alpha=0.8, color='purple')
+        for bar, val in zip(bars, memory):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                   f'{val:.1f}', ha='center', va='bottom', fontsize=9)
         
-        plt.suptitle('Plot.AC: Query Processing Comparison', fontsize=14, y=1.02)
+        ax.set_xlabel('Query Processing Strategy', fontsize=11)
+        ax.set_ylabel('Memory (MB)', fontsize=11)
+        ax.set_title('C: Memory Footprint', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(sorted_labels, rotation=15, ha='right')
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Plot D: Functional Metrics
+        ax = axes[1, 1]
+        precisions = [variants[k]['functional'].get('avg_precision', 0) * 100 for k in sorted_labels]
+        recalls = [variants[k]['functional'].get('avg_recall', 0) * 100 for k in sorted_labels]
+        f1s = [variants[k]['functional'].get('avg_f1', 0) * 100 for k in sorted_labels]
+        
+        width = 0.25
+        ax.bar(x_pos - width, precisions, width, label='Precision', alpha=0.8, color='cyan')
+        ax.bar(x_pos, recalls, width, label='Recall', alpha=0.8, color='magenta')
+        ax.bar(x_pos + width, f1s, width, label='F1-Score', alpha=0.8, color='gold')
+        
+        ax.set_xlabel('Query Processing Strategy', fontsize=11)
+        ax.set_ylabel('Score (%)', fontsize=11)
+        ax.set_title('D: Functional Metrics (vs ESIndex)', fontsize=12, fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(sorted_labels, rotation=15, ha='right')
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        
         plt.tight_layout()
         plt.savefig(self.output_dir / filename, dpi=300, bbox_inches='tight')
         plt.close()

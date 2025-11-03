@@ -80,6 +80,8 @@ def main(cfg: DictConfig):
     all_latency_metrics = {}
     all_throughput_metrics = {}
     all_memory_metrics = {}
+    all_functional_metrics = {}
+    all_metrics = {}
     
     print("\n--- Benchmarking Elasticsearch ---")
     latency_es = perf_metrics.measure_latency(
@@ -116,15 +118,16 @@ def main(cfg: DictConfig):
     
     def create_and_benchmark_variant(info, dstore, compr, qproc, optim, label):
         """Helper function to create and benchmark a single variant"""
-        print(f"\n--- {label} ---")
-        print(f"Creating SelfIndex: info={info}, dstore={dstore}, compr={compr}, qproc={qproc}, optim={optim}")
+        print(f"\n--- {label} ---", flush=True)
+        print(f"Creating SelfIndex: info={info}, dstore={dstore}, compr={compr}, qproc={qproc}, optim={optim}", flush=True)
         
         idx = SelfIndex(cfg, 'SelfIndex', info, dstore, qproc, compr, optim)
         idx.create_index(f"selfindex-{info}-{dstore}-{compr}-{qproc}-{optim}", documents)
         
         idx_key = idx.identifier_short
-        print(f"Benchmarking {idx_key}...")
+        print(f"Benchmarking {idx_key}...", flush=True)
         
+        print(f"  → Measuring latency ({cfg.metrics.num_iterations} iterations)...", flush=True)
         latency = perf_metrics.measure_latency(
             idx.query,
             test_queries,
@@ -132,19 +135,26 @@ def main(cfg: DictConfig):
             num_iterations=cfg.metrics.num_iterations
         )
         all_latency_metrics[idx_key] = latency
-        print(f"Latency - Mean: {latency['mean']:.2f}ms, P95: {latency['p95']:.2f}ms, P99: {latency['p99']:.2f}ms")
+        print(f"  ✓ Latency - Mean: {latency['mean']:.2f}ms, P95: {latency['p95']:.2f}ms, P99: {latency['p99']:.2f}ms", flush=True)
         
+        print(f"  → Measuring throughput ({cfg.metrics.throughput_duration}s)...", flush=True)
         throughput = perf_metrics.measure_throughput(
             idx.query,
             test_queries,
             duration_seconds=cfg.metrics.throughput_duration
         )
         all_throughput_metrics[idx_key] = throughput
-        print(f"Throughput: {throughput['queries_per_second']:.2f} queries/sec")
+        print(f"  ✓ Throughput: {throughput['queries_per_second']:.2f} queries/sec", flush=True)
         
+        print(f"  → Measuring memory footprint...", flush=True)
         memory = perf_metrics.measure_memory_footprint(idx)
         all_memory_metrics[idx_key] = memory
-        print(f"Memory: {memory['rss_mb']:.2f} MB")
+        print(f"  ✓ Memory: {memory['rss_mb']:.2f} MB", flush=True)
+        
+        print(f"  → Computing precision/recall vs ESIndex...", flush=True)
+        functional = perf_metrics.compute_precision_recall_vs_ground_truth(idx, es_index, test_queries)
+        all_functional_metrics[idx_key] = functional
+        print(f"  ✓ Precision: {functional['avg_precision']*100:.1f}%, Recall: {functional['avg_recall']*100:.1f}%, F1: {functional['avg_f1']*100:.1f}%", flush=True)
         
         # Close datastore to free memory
         if hasattr(idx, 'datastore') and idx.datastore:
@@ -226,27 +236,33 @@ def main(cfg: DictConfig):
             'rss_mb': all_memory_metrics[idx_key]['rss_mb']
         }
     
-    # Generate assignment-specific plots
-    # Plot.C: Memory footprint by information type (x=1,2,3)
-    perf_metrics.plot_by_info_type(all_metrics, 'rss_mb', 'plot_c_memory_by_info_type.png')
+    # Generate assignment-specific plots (each plot shows A, B, C, D metrics)
+    # Plot.C: Comparison by information type (x=1,2,3)
+    perf_metrics.plot_by_info_type(all_latency_metrics, all_throughput_metrics, all_memory_metrics, 
+                                   all_functional_metrics, 'plot_c_comparison_by_info_type.png')
     
-    # Plot.A: Latency by datastore type (y=1,2,3)
-    perf_metrics.plot_by_datastore(all_metrics, 'p95', 'plot_a_latency_by_datastore.png')
+    # Plot.A: Comparison by datastore type (y=1,2,3)
+    perf_metrics.plot_by_datastore(all_latency_metrics, all_throughput_metrics, all_memory_metrics,
+                                   all_functional_metrics, 'plot_a_comparison_by_datastore.png')
     
-    # Plot.AB: Latency and Throughput by compression (z=1,2,3)
-    perf_metrics.plot_by_compression(all_metrics, 'mean', 'queries_per_second', 'plot_ab_compression_comparison.png')
+    # Plot.AB: Comparison by compression (z=1,2,3)
+    perf_metrics.plot_by_compression(all_latency_metrics, all_throughput_metrics, all_memory_metrics,
+                                     all_functional_metrics, 'plot_ab_comparison_by_compression.png')
     
-    # Plot.A: Latency with/without skip pointers (i=0/1)
-    perf_metrics.plot_by_skip_pointers(all_metrics, 'mean', 'plot_a_skip_pointers_impact.png')
+    # Plot.A: Comparison with/without skip pointers (i=0/1)
+    perf_metrics.plot_by_skip_pointers(all_latency_metrics, all_throughput_metrics, all_memory_metrics,
+                                       all_functional_metrics, 'plot_a_comparison_skip_pointers.png')
     
-    # Plot.AC: Latency and Memory by query processing (q=T/D)
-    perf_metrics.plot_by_query_processing(all_metrics, 'mean', 'rss_mb', 'plot_ac_query_processing_comparison.png')
+    # Plot.AC: Comparison by query processing (q=T/D)
+    perf_metrics.plot_by_query_processing(all_latency_metrics, all_throughput_metrics, all_memory_metrics,
+                                          all_functional_metrics, 'plot_ac_comparison_query_processing.png')
     
     # Save all metrics to JSON
     perf_metrics.save_metrics({
         'latency': all_latency_metrics,
         'throughput': all_throughput_metrics,
-        'memory': all_memory_metrics
+        'memory': all_memory_metrics,
+        'functional': all_functional_metrics
     }, "all_metrics.json")
     
     print("\n" + "=" * 80)

@@ -108,8 +108,13 @@ class SelfIndex(IndexBase):
         # Check if index already exists
         if self.datastore.exists('metadata'):
             print(f"Loading existing index: {full_identifier}")
-            self._load_index()
-            return
+            try:
+                self._load_index()
+                return
+            except Exception as e:
+                # If metadata is missing or corrupted, log and fall back to rebuilding
+                print(f"Warning: failed to load existing index metadata ({e}). Rebuilding index...")
+                # continue to build index from scratch
 
         print(f"Building index: {full_identifier}")
         
@@ -130,35 +135,64 @@ class SelfIndex(IndexBase):
         print(f"Index created with {self.total_docs} documents and {len(self.inverted_index)} terms")
     
     def _load_index(self):
-        metadata_str = self.datastore.get('metadata')
-        if not metadata_str:
+        metadata_obj = self.datastore.get('metadata')
+        if not metadata_obj:
             raise FileNotFoundError("Metadata not found in datastore.")
-        
-        # Assuming metadata is stored as a JSON string
-        metadata = json.loads(metadata_str)
-        
-        # Handle both old and new formats
-        self.documents = {int(k): v for k, v in metadata.get('documents', {}).items()} if metadata.get('documents') else {}
+
+        # metadata_obj might be a dict (already deserialized), a JSON string, or bytes
+        if isinstance(metadata_obj, dict):
+            metadata = metadata_obj
+        else:
+            # Try to coerce into a dict via JSON
+            try:
+                if isinstance(metadata_obj, (bytes, bytearray)):
+                    metadata = json.loads(metadata_obj.decode('utf-8'))
+                else:
+                    metadata = json.loads(str(metadata_obj))
+            except Exception as e:
+                raise ValueError(f"Unable to parse metadata JSON: {e}")
+
+        # Basic validation of metadata keys
+        required_keys = ['next_doc_id', 'doc_lengths', 'avg_doc_length', 'total_docs']
+        if not all(k in metadata for k in required_keys):
+            raise KeyError(f"Metadata missing required keys: {required_keys}. Found: {list(metadata.keys())}")
+
+        # Don't load documents - they're not stored to save space
+        self.documents = {}  # Empty - we don't need full text after indexing
+        # doc_id_map is optional (older metadata may not include it); default to empty
         self.doc_id_map = metadata.get('doc_id_map', {})
         self.next_doc_id = metadata.get('next_doc_id', 0)
         self.doc_lengths = {int(k): v for k, v in metadata.get('doc_lengths', {}).items()}
-        self.avg_doc_length = metadata.get('avg_doc_length', 0.0)
+        self.avg_doc_length = metadata.get('avg_doc_length', 0)
         self.total_docs = metadata.get('total_docs', 0)
         self.idf_scores = metadata.get('idf_scores', {})
         self.tfidf_scores = {k: {int(ik): iv for ik, iv in v.items()} for k, v in metadata.get('tfidf_scores', {}).items()}
-        
+
         raw_index = self.datastore.get_all()
         self.inverted_index = {}
         for term, data in raw_index.items():
             if term == 'metadata':
                 continue
-            
-            if self.compressor:
-                decompressed_data = self.compressor.decompress_pl(data)
-                self.inverted_index[term] = PostingsList.from_dict(decompressed_data)
-            else:
-                # If not compressed, data might be a JSON string
-                self.inverted_index[term] = PostingsList.from_dict(json.loads(data))
+            # data may be bytes, a dict, or a JSON string depending on datastore
+            try:
+                if self.compressor:
+                    # compressor expects bytes-like input
+                    raw = data
+                    decompressed_data = self.compressor.decompress_pl(raw)
+                    pl_dict = decompressed_data
+                else:
+                    if isinstance(data, dict):
+                        pl_dict = data
+                    elif isinstance(data, (bytes, bytearray)):
+                        pl_dict = json.loads(data.decode('utf-8'))
+                    else:
+                        pl_dict = json.loads(str(data))
+
+                self.inverted_index[term] = PostingsList.from_dict(pl_dict)
+            except Exception as e:
+                # Skip terms we can't parse but log for debugging
+                print(f"Warning: failed to load postings for term '{term}': {e}")
+                continue
         
         print(f"Successfully loaded index with {self.total_docs} documents and {len(self.inverted_index)} terms.")
 
@@ -228,9 +262,9 @@ class SelfIndex(IndexBase):
             pl.build_skip_pointers()
 
     def _persist_index(self):
+        # Don't store full document text - only store metadata needed for querying
         metadata = {
             'identifier': self.identifier_short,
-            'documents': self.documents,
             'doc_id_map': self.doc_id_map,
             'next_doc_id': self.next_doc_id,
             'doc_lengths': self.doc_lengths,
