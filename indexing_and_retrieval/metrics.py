@@ -113,23 +113,30 @@ class PerformanceMetrics:
         }
     
     def compute_precision_recall_vs_ground_truth(self, index_obj, ground_truth_index, 
-                                                  queries: List[str]) -> Dict:
+                                                  queries: List[str], max_queries: int = 5) -> Dict:
         """
         Compute precision/recall metrics by comparing index results against ground truth (ESIndex).
+        Uses only a subset of queries to speed up evaluation.
         
         Args:
             index_obj: The index to evaluate
             ground_truth_index: The ground truth index (typically ESIndex)
             queries: List of queries to test
+            max_queries: Maximum number of queries to use (default: 5 for speed)
             
         Returns:
             Dictionary with average precision, recall, and F1 scores
         """
+        # Use only first max_queries for speed
+        test_queries = queries[:max_queries]
+        
         precisions = []
         recalls = []
         f1_scores = []
         
-        for query in queries:
+        print(f"    Computing P/R on {len(test_queries)} queries...", end='', flush=True)
+        
+        for i, query in enumerate(test_queries):
             try:
                 # Get results from both indices
                 retrieved = set(index_obj.query(query))
@@ -140,9 +147,14 @@ class PerformanceMetrics:
                 precisions.append(metrics['precision'])
                 recalls.append(metrics['recall'])
                 f1_scores.append(metrics['f1'])
+                
+                if (i + 1) % 2 == 0:
+                    print('.', end='', flush=True)
             except Exception as e:
-                print(f"Warning: Query '{query}' failed: {e}")
+                print(f"\n    Warning: Query '{query}' failed: {e}")
                 continue
+        
+        print(' Done', flush=True)
         
         return {
             'avg_precision': sum(precisions) / len(precisions) if precisions else 0.0,

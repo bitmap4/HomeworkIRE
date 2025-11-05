@@ -95,13 +95,23 @@ class PostgresStore(DataStoreBase):
     def __init__(self, config: DictConfig, table_name: str):
         self.config = config
         self.table_name = table_name
-        self.conn = psycopg2.connect(
-            host=config.postgres.host,
-            port=config.postgres.port,
-            database=config.postgres.database,
-            user=config.postgres.user,
-            password=config.postgres.password
-        )
+        
+        # Debug: print connection parameters
+        print(f"  PostgreSQL connection: host={config.postgres.host}, port={config.postgres.port}, "
+              f"db={config.postgres.database}, user={config.postgres.user}", flush=True)
+        
+        try:
+            self.conn = psycopg2.connect(
+                host=config.postgres.host,
+                port=config.postgres.port,
+                database=config.postgres.database,
+                user=config.postgres.user,
+                password=config.postgres.password
+            )
+        except Exception as e:
+            print(f"  ERROR: Failed to connect to PostgreSQL: {e}", flush=True)
+            raise
+        
         self._create_table()
     
     def _create_table(self):
@@ -116,27 +126,21 @@ class PostgresStore(DataStoreBase):
             self.conn.commit()
     
     def put(self, key: str, value: Any):
-        # Handle different data types
+        # Buffer the put operations and commit in bulk in commit()
         if isinstance(value, bytes):
-            # Binary data (compressed)
             data_to_store = value
             is_json = False
         elif isinstance(value, str):
-            # String data (JSON string)
             data_to_store = value.encode('utf-8')
             is_json = True
         else:
-            # Other data - serialize to JSON
             data_to_store = json.dumps(value).encode('utf-8')
             is_json = True
-        
-        with self.conn.cursor() as cur:
-            cur.execute(f"""
-                INSERT INTO {self.table_name} (key, value, is_json) 
-                VALUES (%s, %s, %s)
-                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, is_json = EXCLUDED.is_json
-            """, (key, data_to_store, is_json))
-            self.conn.commit()
+
+        # Store in-memory for batch commit
+        if not hasattr(self, '_batch'):
+            self._batch = []
+        self._batch.append((key, data_to_store, is_json))
     
     def get(self, key: str):
         with self.conn.cursor() as cur:
@@ -172,8 +176,23 @@ class PostgresStore(DataStoreBase):
             return cur.fetchone() is not None
     
     def commit(self):
-        # PostgresStore commits after each put operation, so this is a no-op
-        pass
+        # Flush any buffered puts using a single bulk upsert (execute_values)
+        if not hasattr(self, '_batch') or not self._batch:
+            return
+
+        sql = f"INSERT INTO {self.table_name} (key, value, is_json) VALUES %s " \
+              f"ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, is_json = EXCLUDED.is_json"
+
+        with self.conn.cursor() as cur:
+            # Use psycopg2.extras.execute_values for bulk upsert
+            try:
+                execute_values(cur, sql, self._batch, template=None, page_size=1000)
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            finally:
+                self._batch = []
     
     def close(self):
         self.conn.close()

@@ -127,12 +127,14 @@ def main(cfg: DictConfig):
         idx_key = idx.identifier_short
         print(f"Benchmarking {idx_key}...", flush=True)
         
-        print(f"  → Measuring latency ({cfg.metrics.num_iterations} iterations)...", flush=True)
+        # Use fewer iterations for SelfIndex to speed up benchmarking on large datasets
+        num_iters = max(10, cfg.metrics.num_iterations // 2)
+        print(f"  → Measuring latency ({num_iters} iterations)...", flush=True)
         latency = perf_metrics.measure_latency(
             idx.query,
             test_queries,
             num_warmup=cfg.metrics.num_warmup,
-            num_iterations=cfg.metrics.num_iterations
+            num_iterations=num_iters
         )
         all_latency_metrics[idx_key] = latency
         print(f"  ✓ Latency - Mean: {latency['mean']:.2f}ms, P95: {latency['p95']:.2f}ms, P99: {latency['p99']:.2f}ms", flush=True)

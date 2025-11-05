@@ -118,21 +118,31 @@ class SelfIndex(IndexBase):
 
         print(f"Building index: {full_identifier}")
         
+        doc_count = 0
         for file_id, content in files:
             self._add_document(file_id, content)
+            doc_count += 1
+            if doc_count % 5000 == 0:
+                print(f"  Processed {doc_count} documents...", flush=True)
         
         self.total_docs = len(self.documents)
+        print(f"  Total: {self.total_docs} documents indexed", flush=True)
+        
+        print(f"  Computing statistics...", flush=True)
         self._compute_avg_doc_length()
         
         if self.info_type == IndexInfo.TFIDF:
+            print(f"  Computing TF-IDF...", flush=True)
             self._compute_idf()
             self._compute_tfidf()
         
         if self.optim_type == Optimizations.Skipping:
+            print(f"  Building skip pointers...", flush=True)
             self._build_skip_pointers()
         
+        print(f"  Persisting index...", flush=True)
         self._persist_index()
-        print(f"Index created with {self.total_docs} documents and {len(self.inverted_index)} terms")
+        print(f"✓ Index created: {self.total_docs} documents, {len(self.inverted_index)} terms", flush=True)
     
     def _load_index(self):
         metadata_obj = self.datastore.get('metadata')
@@ -275,17 +285,48 @@ class SelfIndex(IndexBase):
         }
         # Serialize metadata to a JSON string before storing
         self.datastore.put('metadata', json.dumps(metadata))
-        
-        for term, pl in self.inverted_index.items():
-            pl_dict = pl.to_dict()
-            if self.compressor:
-                compressed_data = self.compressor.compress_pl(pl_dict)
-                self.datastore.put(term, compressed_data)
-            else:
-                # Serialize to JSON string if not compressing
-                self.datastore.put(term, json.dumps(pl_dict))
-        
-        self.datastore.commit()
+
+        # Batch persistence: write terms in batches and commit periodically to avoid
+        # excessive memory use or extremely long single transactions.
+        # Safe retrieval of batch_size from config, default to 1000
+        try:
+            batch_size = int(self.config.persist.batch_size)
+        except Exception:
+            batch_size = 1000
+        term_count = 0
+        total_terms = len(self.inverted_index)
+
+        try:
+            batch_terms = 0
+            for term, pl in self.inverted_index.items():
+                pl_dict = pl.to_dict()
+                if self.compressor:
+                    compressed_data = self.compressor.compress_pl(pl_dict)
+                    self.datastore.put(term, compressed_data)
+                else:
+                    # Serialize to JSON string if not compressing
+                    self.datastore.put(term, json.dumps(pl_dict))
+
+                term_count += 1
+                batch_terms += 1
+
+                if batch_terms >= batch_size:
+                    # Commit the batch and print progress
+                    self.datastore.commit()
+                    print(f"  Persisted {term_count}/{total_terms} terms...", flush=True)
+                    batch_terms = 0
+
+            # Final commit for any remaining items
+            if batch_terms > 0:
+                self.datastore.commit()
+                print(f"  Persisted {term_count}/{total_terms} terms...", flush=True)
+        except Exception as e:
+            # Attempt to commit any buffered writes, then re-raise
+            try:
+                self.datastore.commit()
+            except Exception:
+                pass
+            raise
 
     def update_index(self, add_files: Iterable[Tuple[str, str]] = None, remove_files: Iterable[str] = None):
         if add_files is None:

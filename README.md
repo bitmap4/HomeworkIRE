@@ -10,14 +10,6 @@ Or run interactively:
 docker-compose run --rm app python main.py
 ```
 
-This executes the full pipeline:
-- Loads news (2 zips) and Wikipedia data
-- Generates word frequency plots
-- Creates Elasticsearch index (ESIndex-v1.0)
-- Creates 8 SelfIndex variants
-- Runs performance benchmarks
-- Generates comparison plots
-
 ## Query Indices
 
 Query Elasticsearch:
